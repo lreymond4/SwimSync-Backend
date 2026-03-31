@@ -13,7 +13,7 @@ const router = Router();
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',           // tighten to your GitHub Pages domain in prod
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
@@ -260,7 +260,7 @@ router.get('/api/videos', async (request, env) => {
   let query = supabase
     .from('videos')
     .select(`
-      id, title, file_key, file_size, duration, status, created_at,
+      id, title, file_key, file_size, duration, status, created_at, notes,
       meet:meets(id, name, date),
       uploader:users(id, display_name)
     `)
@@ -285,7 +285,7 @@ router.get('/api/videos/:id', async ({ params }, env) => {
   const { data, error } = await supabase
     .from('videos')
     .select(`
-      id, title, file_key, file_size, duration, status, created_at,
+      id, title, file_key, file_size, duration, status, created_at, notes,
       meet:meets(id, name, date),
       uploader:users(id, display_name),
       tags(id, swimmer_id, start_time, end_time, note, swimmer:swimmers(id, name))
@@ -344,6 +344,74 @@ router.post('/api/videos/:id/tags', async (request, env) => {
   }
 
   return corsResponse({ tag }, 201);
+});
+
+/**
+ * DELETE /api/videos/:id
+ * Authenticated — hard-deletes the video from R2 and Supabase.
+ */
+router.delete('/api/videos/:id', async (request, env) => {
+  const user = await verifyAuth(request, env);
+  if (!user) return errorResponse('Unauthorized', 401);
+
+  const { params } = request;
+  const supabase = getSupabase(env);
+
+  const { data, error } = await supabase
+    .from('videos')
+    .select('file_key')
+    .eq('id', params.id)
+    .single();
+
+  if (error || !data) return errorResponse('Video not found', 404);
+
+  // Delete from R2 first
+  try { await env.R2_BUCKET.delete(data.file_key); }
+  catch (err) { console.error('R2 delete error:', err); }
+
+  // Hard-delete from Supabase
+  const { error: delErr } = await supabase
+    .from('videos')
+    .delete()
+    .eq('id', params.id);
+
+  if (delErr) {
+    console.error('DB delete error:', delErr);
+    return errorResponse('Failed to delete video', 500);
+  }
+
+  return corsResponse({ success: true });
+});
+
+/**
+ * PATCH /api/videos/:id/notes
+ * Authenticated — update the notes field (max 500 chars).
+ */
+router.patch('/api/videos/:id/notes', async (request, env) => {
+  const user = await verifyAuth(request, env);
+  if (!user) return errorResponse('Unauthorized', 401);
+
+  const { params } = request;
+  let body;
+  try { body = await request.json(); }
+  catch { return errorResponse('Invalid JSON body'); }
+
+  const { notes } = body;
+  if (typeof notes !== 'string') return errorResponse('notes must be a string');
+  if (notes.length > 500) return errorResponse('Notes must be 500 characters or fewer');
+
+  const supabase = getSupabase(env);
+  const { error } = await supabase
+    .from('videos')
+    .update({ notes: notes.trim() })
+    .eq('id', params.id);
+
+  if (error) {
+    console.error('notes update error:', error);
+    return errorResponse('Failed to save notes', 500);
+  }
+
+  return corsResponse({ success: true });
 });
 
 /**
