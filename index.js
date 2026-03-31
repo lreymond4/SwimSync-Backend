@@ -124,7 +124,7 @@ router.post('/api/create-upload', async (request, env) => {
     return errorResponse('File size must be > 0 and ≤ 2 GB');
   }
 
-  if (!meetId || !title) return errorResponse('meetId and title are required');
+  if (!title) return errorResponse('title is required');
 
   // Generate a unique object key
   const ext = filename?.split('.').pop() ?? 'mp4';
