@@ -333,9 +333,11 @@ router.all('*', () => errorResponse('Not Found', 404));
 
 export default {
   async fetch(request, env, ctx) {
-    return router.handle(request, env, ctx).catch((err) => {
+    try {
+      return await router.fetch(request, env, ctx);
+    } catch (err) {
       console.error('Unhandled error:', err);
       return errorResponse('Internal Server Error', 500);
-    });
+    }
   },
 };
