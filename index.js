@@ -72,6 +72,27 @@ async function hasUploaderRole(userId, env) {
  * The Worker R2 binding only exposes put/get/delete directly — for a presigned
  * URL we sign against R2's S3-compatible endpoint.
  */
+async function createPresignedGetUrl(env, objectKey, expiresInSeconds = 3600) {
+  const aws = new AwsClient({
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    region: 'auto',
+    service: 's3',
+  });
+
+  const url = new URL(
+    `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${objectKey}`
+  );
+  url.searchParams.set('X-Amz-Expires', String(expiresInSeconds));
+
+  const signed = await aws.sign(
+    new Request(url.toString(), { method: 'GET' }),
+    { aws: { signQuery: true } }
+  );
+
+  return signed.url;
+}
+
 async function createPresignedPutUrl(env, objectKey, contentType, expiresInSeconds = 900) {
   const aws = new AwsClient({
     accessKeyId: env.R2_ACCESS_KEY_ID,
@@ -323,6 +344,30 @@ router.post('/api/videos/:id/tags', async (request, env) => {
   }
 
   return corsResponse({ tag }, 201);
+});
+
+/**
+ * GET /api/videos/:id/url
+ * Public — returns a short-lived presigned GET URL to stream the video from R2.
+ */
+router.get('/api/videos/:id/url', async ({ params }, env) => {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase
+    .from('videos')
+    .select('file_key')
+    .eq('id', params.id)
+    .eq('status', 'ready')
+    .single();
+
+  if (error || !data) return errorResponse('Video not found', 404);
+
+  try {
+    const url = await createPresignedGetUrl(env, data.file_key);
+    return corsResponse({ url });
+  } catch (err) {
+    console.error('presign get error:', err);
+    return errorResponse('Failed to generate video URL', 500);
+  }
 });
 
 // ─── 404 fallback ─────────────────────────────────────────────────────────────
